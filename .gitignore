@@ -30,12 +30,11 @@ logs/
 # node_modules/ # Si tuvieras un frontend con Node.js
 
 # Carpetas de salida generadas por la aplicación
-outputs/ # Esto ignorará outputs/audio, outputs/scripts, outputs/videos
-
+outputs/
 # Archivos de secretos y configuración sensible
 # ¡MUY IMPORTANTE!
-secrets/ # Ignora toda la carpeta de secretos donde está tu gcp-tts-credentials.json
-app/core/config.py # Ignora tu archivo de configuración con claves API reales
+secrets/
+app/core/config.py
 
 # Archivos de Docker (a veces se generan localmente, aunque los principales se versionan)
 # .dockerignore ya lo tenemos y sí se versiona.
