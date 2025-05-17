@@ -1,0 +1,28 @@
+# Entorno virtual de Python
+.venv/
+
+# Archivos de bytecode de Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Archivos de configuración de IDEs
+.vscode/
+.idea/
+
+# Archivos de sistema operativo
+.DS_Store
+Thumbs.db
+
+# Archivos de Docker (para evitar recursividad si se montan)
+Dockerfile
+.dockerignore
+docker-compose.yml 
+# (si ya lo tuvieras, aunque lo crearemos después)
+
+# Logs
+*.log
+
+# Bases de datos locales SQLite (si las usaras para pruebas rápidas fuera de Docker)
+*.sqlite3

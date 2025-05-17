@@ -1,0 +1,65 @@
+services:
+  # Servicio para el backend de FastAPI
+  backend:
+    build:
+      context: . # Usa el Dockerfile en el directorio actual (raíz del proyecto)
+      dockerfile: Dockerfile # Especifica el nombre del Dockerfile
+    image: video-generator-backend # Opcional: si ya construiste la imagen y quieres que compose la use
+                                   # Si no, compose la construirá usando el 'build' context.
+                                   # Es bueno tener la sección 'build' para que compose pueda reconstruir si es necesario.
+    container_name: video_generator_backend_container # Nombre personalizado para el contenedor
+    ports:
+      - "8000:8000" # Mapea el puerto 8000 del host al puerto 8000 del contenedor (donde Uvicorn escucha)
+    volumes:
+      - ./app:/usr/src/app/app # Monta el código de tu aplicación 'app' local en el contenedor
+                               # Esto permite el live-reloading con Uvicorn si cambias el código.
+      - ./secrets:/usr/src/app/secrets:ro # Monta el directorio 'secrets' como solo lectura
+                               # Útil para mantener tus secretos fuera del contenedor.
+      - ./outputs:/usr/src/app/outputs # Monta el directorio 'outputs' para guardar los resultados de la aplicación
+    environment:
+      # Aquí podrías añadir variables de entorno que tu aplicación necesite
+      # Por ejemplo:
+      # - PYTHON_ENV=development
+      # - REDIS_HOST=redis
+      # - REDIS_PORT=6379
+      PYTHONUNBUFFERED: 1 # Ya lo pusimos en el Dockerfile, pero no hace daño aquí.
+      GOOGLE_APPLICATION_CREDENTIALS: /usr/src/app/secrets/video-generator-project-82bf0abccf3d.json
+    depends_on:
+      - redis # Indica que el servicio 'backend' depende del servicio 'redis'
+              # Compose intentará iniciar 'redis' antes que 'backend'.
+
+  # Servicio para Redis
+  redis:
+    image: "redis:alpine" # Usa una imagen oficial de Redis, la versión 'alpine' es ligera
+    container_name: video_generator_redis_container # Nombre personalizado
+    ports:
+      - "6379:6379" # Mapea el puerto 6379 del host al puerto 6379 del contenedor (puerto por defecto de Redis)
+                    # Opcional si solo necesitas acceso desde otros contenedores.
+    volumes:
+      - redis_data:/data # Persiste los datos de Redis en un volumen nombrado
+                         # Útil si quieres que los datos de Redis sobrevivan reinicios del contenedor
+  celery_worker:
+      build:
+        context: . # Usa el mismo Dockerfile que el backend
+        dockerfile: Dockerfile
+      # O puedes usar la imagen ya construida si prefieres:
+      # image: video-generator-backend 
+      container_name: video_generator_celery_worker_container
+      volumes:
+        - ./app:/usr/src/app/app # Monta el código para que el worker vea los cambios
+        - ./secrets:/usr/src/app/secrets:ro # Monta el directorio 'secrets' como solo lectura
+        - ./outputs:/usr/src/app/outputs
+      environment:
+        PYTHONUNBUFFERED: 1
+        GOOGLE_APPLICATION_CREDENTIALS: /usr/src/app/secrets/video-generator-project-82bf0abccf3d.json
+        # Si necesitas variables de entorno específicas para el worker, van aquí.
+        # Por ejemplo, las mismas que usa Celery para conectarse a Redis,
+        # aunque Celery ya las toma de su propia configuración.
+
+      command: > # El comando que ejecutará este contenedor
+        sh -c "celery -A app.workers.celery_app.celery_app worker -l info -c 1"
+      depends_on:
+        - redis # El worker necesita que Redis esté disponible
+
+volumes:
+  redis_data: # Define el volumen nombrado para la persistencia de Redis

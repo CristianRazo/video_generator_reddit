@@ -1,0 +1,21 @@
+# app/core/config.py.example
+
+# Credenciales de la API de Reddit (PRAW)
+REDDIT_CLIENT_ID = "TU_CLIENT_ID_DE_REDDIT_AQUI"
+REDDIT_CLIENT_SECRET = "TU_CLIENT_SECRET_DE_REDDIT_AQUI"
+REDDIT_USER_AGENT = "Python:VideoGenerator:0.1 by u/TU_USERNAME_DE_REDDIT"
+# REDDIT_USERNAME = "TU_USERNAME_DE_REDDIT_OPCIONAL"
+# REDDIT_PASSWORD = "TU_PASSWORD_DE_REDDIT_OPCIONAL"
+
+# Credenciales de OpenAI API
+OPENAI_API_KEY = "sk-TU_CLAVE_API_SECRETA_DE_OPENAI_AQUI"
+
+# Para Google Cloud TTS (NO guardes el JSON en config.py, usa la variable de entorno)
+# Simplemente indica que se necesita la variable de entorno:
+# GOOGLE_APPLICATION_CREDENTIALS debe estar configurada en el entorno apuntando al archivo .json
+# Ejemplo en docker-compose.yml:
+# environment:
+#   GOOGLE_APPLICATION_CREDENTIALS: /usr/src/app/secrets/gcp-tts-credentials.json
+
+# Ejemplo de una variable que SÍ podría ir en config.py si no es secreta
+DEFAULT_NARRATION_LANGUAGE = "español"

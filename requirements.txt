@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+celery
+redis
+pydantic
+praw
+google-cloud-texttospeech
+nltk
+mutagen
+openai
+moviepy
