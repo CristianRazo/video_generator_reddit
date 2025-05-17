@@ -1,0 +1,55 @@
+# Entornos virtuales de Python
+.venv/
+venv/
+env/
+ENV/
+
+# Bytecode y archivos compilados de Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db # Si usas SQLite para pruebas locales fuera de Docker
+
+# Archivos de configuración de IDEs
+.vscode/
+!.vscode/settings.json  # Puedes descomentar esta si quieres versionar settings.json del workspace
+!.vscode/extensions.json # Puedes descomentar si quieres versionar recomendaciones de extensiones
+.idea/
+
+# Archivos de sistema operativo
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+*.log.*
+
+# Archivos de dependencias descargados localmente (si los tuvieras fuera de .venv)
+# node_modules/ # Si tuvieras un frontend con Node.js
+
+# Carpetas de salida generadas por la aplicación
+outputs/ # Esto ignorará outputs/audio, outputs/scripts, outputs/videos
+
+# Archivos de secretos y configuración sensible
+# ¡MUY IMPORTANTE!
+secrets/ # Ignora toda la carpeta de secretos donde está tu gcp-tts-credentials.json
+app/core/config.py # Ignora tu archivo de configuración con claves API reales
+
+# Archivos de Docker (a veces se generan localmente, aunque los principales se versionan)
+# .dockerignore ya lo tenemos y sí se versiona.
+# Podrías añadir aquí archivos específicos de Docker que no quieras subir si se generan.
+
+# Archivos de NLTK Data descargados localmente (si los descargaste fuera del Dockerfile a una carpeta del proyecto)
+# nltk_data/ # Si creaste una carpeta así en el raíz.
+# app/nltk_data/ # Si creaste una carpeta así dentro de app.
+# app/app/nltk_data/ # Si la creaste dentro de app/app.
+# La idea es no subir los paquetes de datos de NLTK al repositorio.
+# Nuestro Dockerfile actual descarga 'punkt' dentro de la imagen, así que esto
+# podría no ser necesario si no tienes una copia local de nltk_data en el proyecto.
+
+# Dependencias de build específicas de tu OS si no son cross-platform (raro para Python)
+# build/
+# dist/
+# *.egg-info/
