@@ -1,0 +1,271 @@
+# video_generator_reddit/app/services/project_export_service.py
+import xml.etree.ElementTree as ET
+from xml.dom import minidom # Para "embellecer" el XML final
+import os
+from typing import List, Dict, Optional, Any # Asegúrate de tener estas
+import uuid # Para generar IDs únicos para recursos y clips
+
+# Asumimos que tenemos la información del framerate y la resolución del video
+# Estos valores vendrán de los parámetros de la función principal o de una configuración
+
+def generate_fcpxml(
+    project_id: str,
+    script_segments: List[Dict[str, Any]], # La lista de segmentos de nuestro script_data.json
+    main_background_asset_path: Optional[str], # Ruta (en contenedor) al video/imagen de fondo principal
+    main_background_asset_type: str, # "static_video" o "static_image"
+    total_duration_s: float, # Duración total de la narración
+    video_resolution: tuple = (1920, 1080),
+    fps: int = 24,
+    fcpxml_output_path: Optional[str] = None # Ruta donde guardar el .fcpxml
+) -> Optional[str]:
+    """
+    Genera un archivo FCPXML básico para importar en DaVinci Resolve.
+    Incluye una pista de video de fondo y una pista de audio con la narración.
+    """
+    print(f"[FCPXML Export - {project_id}] Iniciando generación de FCPXML...")
+
+    # --- Configuración básica de FCPXML ---
+    # FCPXML usa tiempos en formato "NUMERADOR/DENOMINADORs", ej "120/24s" para 5 segundos a 24fps
+    # O simplemente el número de frames como un entero si el 'frameDuration' de la secuencia está bien definido.
+    # MoviePy y PRAW nos dan duraciones en segundos o ms.
+    # Resolve suele trabajar bien con segundos decimales también en muchos campos de duración/offset.
+    # Para FCPXML, es común ver duraciones en "frames" o en "segundos racionales".
+    # Por ejemplo, para 24 fps, un segundo es "2400/100s" o 24 frames.
+    # Una duración en segundos 'D' sería (D * fps) frames. Ej: D * 24/1s
+    
+    # Helper para convertir segundos a formato FCPXML "NUMs" (ej. 120/24s o solo el número de frames)
+    def format_time_fcpxml(seconds: float, frame_rate: int) -> str:
+        num_frames = int(round(seconds * frame_rate))
+        return f"{num_frames}/{frame_rate}s" # ej. "60/24s" para 2.5 segundos a 24fps
+        # Alternativamente, solo el número de frames como string, si frameDuration está bien seteado en la secuencia.
+        # return str(num_frames)
+
+    # --- Raíz del Documento FCPXML ---
+    fcpxml_root = ET.Element("fcpxml", version="1.9") # Usar una versión común como 1.9 o 1.10
+
+    # --- Sección de Recursos ---
+    resources = ET.SubElement(fcpxml_root, "resources")
+    
+    # Formato (definición de la resolución y framerate)
+    format_id = "r1" # ID para este formato
+    ET.SubElement(resources, "format", id=format_id, name=f"FFVideoFormat{fps}p", 
+                  width=str(video_resolution[0]), height=str(video_resolution[1]),
+                  frameDuration=f"100/{fps*100}s", # ej. "100/2400s" para 24fps
+                  # OJO: frameDuration es la duración de UN frame. 1/fps. 100/(fps*100) = 1/fps
+                  # colorSpace="1-1-1 (Rec. 709)" # Opcional
+                  )
+
+    # Asset para el video/imagen de fondo principal
+    bg_asset_id = None
+    if main_background_asset_path:
+        bg_asset_id = f"asset-bg-{uuid.uuid4().hex[:8]}"
+        # Asumimos que main_background_asset_path es la ruta DENTRO del contenedor
+        # Para FCPXML, idealmente las rutas deberían ser accesibles por Resolve.
+        # Podríamos necesitar pasar rutas que Resolve pueda entender (absolutas del sistema donde corre Resolve).
+        # Por ahora, usaremos la ruta tal cual, asumiendo que Resolve corre en un sistema que ve los 'outputs'.
+        # O usar rutas relativas si el FCPXML se guarda junto a una carpeta de media.
+        # Para simplificar, asumimos que Resolve podrá encontrar el archivo por su nombre si está en una carpeta de media.
+        
+        bg_filename_for_resolve = os.path.basename(main_background_asset_path) # Solo el nombre del archivo
+        
+        asset_attrs = {
+            "id": bg_asset_id,
+            "name": bg_filename_for_resolve,
+            "src": f"file://{main_background_asset_path}", # Resolve necesita una URL de archivo válida
+            "start": "0s", # Asumimos que el asset empieza en 0
+            "duration": format_time_fcpxml(total_duration_s, fps), # Duración del fondo ya ajustada
+            "hasVideo": "1", 
+            "format": format_id
+        }
+        if main_bg_type == "static_video":
+            asset_attrs["hasAudio"] = "0" # Asumimos que no usamos su audio
+        ET.SubElement(resources, "asset", attrib=asset_attrs)
+
+    # Assets para cada clip de audio TTS
+    audio_asset_ids = []
+    for i, seg in enumerate(script_segments):
+        audio_path_in_container = os.path.join("/usr/src/app", seg['actual_tts_audio_url'])
+        audio_filename_for_resolve = os.path.basename(audio_path_in_container)
+        asset_id = f"asset-audio-{i+1}-{uuid.uuid4().hex[:8]}"
+        audio_asset_ids.append(asset_id)
+        
+        seg_duration_s = seg['actual_tts_duration_ms'] / 1000.0
+        ET.SubElement(resources, "asset", id=asset_id, name=audio_filename_for_resolve,
+                      src=f"file://{audio_path_in_container}", # Ruta accesible por Resolve
+                      start="0s",
+                      duration=format_time_fcpxml(seg_duration_s, fps),
+                      hasAudio="1", format=format_id) # Usar el mismo format_id por ahora
+
+    # --- Librería y Evento ---
+    library = ET.SubElement(fcpxml_root, "library")
+    event_name = f"Evento Proyecto {project_id}"
+    event = ET.SubElement(library, "event", name=event_name)
+
+    # --- Proyecto (Secuencia Principal) ---
+    project_fcpxml_name = f"Proyecto Video {project_id}"
+    # Resolve usa 'project' para la secuencia, FCPX usa 'sequence'
+    # Para compatibilidad con Resolve, usaremos 'project' o una 'sequence' dentro de un 'project'
+    # Vamos a crear una secuencia dentro del evento.
+    
+    sequence_id = f"seq-{uuid.uuid4().hex[:8]}"
+    sequence = ET.SubElement(event, "sequence", id=sequence_id, name=project_fcpxml_name,
+                             duration=format_time_fcpxml(total_duration_s, fps),
+                             format=format_id, tcFormat="NDF") # NDF = Non-Drop Frame
+
+    spine = ET.SubElement(sequence, "spine") # La línea de tiempo principal
+
+    # Añadir el clip de video de fondo a la pista V1
+    if bg_asset_id and final_background_track: # final_background_track es el objeto MoviePy clip que ya preparamos
+        # Usaremos la duración total de la narración para el clip de fondo en la línea de tiempo
+        bg_clip_item = ET.SubElement(spine, "asset-clip", name=os.path.basename(main_background_asset_path),
+                                     ref=bg_asset_id,
+                                     duration=format_time_fcpxml(total_duration_s, fps),
+                                     format=format_id,
+                                     offset="0s", # Empieza al inicio de la secuencia
+                                     # lane="-1" # Opcional para indicar que es una capa inferior
+                                     )
+        # Podríamos añadir un elemento <video> dentro de asset-clip si necesitamos transformaciones,
+        # pero por ahora lo mantenemos simple.
+
+    # Añadir los clips de audio TTS a la pista A1 (o A1, A2, etc.)
+    current_audio_offset_s = 0.0
+    for i, seg in enumerate(script_segments):
+        seg_duration_s = seg['actual_tts_duration_ms'] / 1000.0
+        asset_id = audio_asset_ids[i] # El ID del asset de audio que creamos antes
+        
+        # Crear un clip de audio en la línea de tiempo
+        audio_clip_item = ET.SubElement(spine, "asset-clip", name=f"Audio Segment {i+1}",
+                                        ref=asset_id,
+                                        duration=format_time_fcpxml(seg_duration_s, fps),
+                                        offset=format_time_fcpxml(current_audio_offset_s, fps),
+                                        # lane="1" # Pista de audio 1
+                                        format=format_id,
+                                        audioRole="dialogue" # Rol de audio
+                                        )
+        # Si necesitamos especificar el canal de audio dentro del asset:
+        # ET.SubElement(audio_clip_item, "audio-channel-source", srcCh="1, 2") # Para estéreo
+
+        current_audio_offset_s += seg_duration_s
+
+    # --- (Opcional MUY BÁSICO: Añadir Textos como Títulos Conectados) ---
+    # Esto es simplificado. FCPXML tiene elementos <title> más complejos para texto estilizado.
+    # Un 'title' en FCPXML es un tipo especial de 'effect' o un generador.
+    # Por ahora, para mantenerlo simple, podríamos generar los textos como notas o metadatos,
+    # o si quieres que aparezcan visualmente de forma básica en Resolve:
+    # Esta es la parte más compleja de mapear desde nuestros TextClips.
+    # Una forma es crear un "compound clip" o un "storyline" secundario para los textos.
+    # O un "title" por cada segmento.
+    
+    # Ejemplo MUY simple de un título (esto necesitaría mucha más elaboración para el estilo)
+    # current_text_offset_s = 0.0
+    # for i, seg in enumerate(script_segments):
+    #     seg_duration_s = seg['actual_tts_duration_ms'] / 1000.0
+    #     text_content = seg['text_chunk']
+    #     title_clip = ET.SubElement(spine, "title", name=f"Text Segment {i+1}",
+    #                                offset=format_time_fcpxml(current_text_offset_s, fps),
+    #                                duration=format_time_fcpxml(seg_duration_s, fps),
+    #                                ref="r2") # Necesitaría un <effect id="r2" name="Basic Title" uid="..."/> en resources
+    #     param_text = ET.SubElement(title_clip, "param", name="Text")
+    #     ET.SubElement(param_text, "text-style").text = text_content # Esto es muy simplificado
+    #     # Aquí faltaría definir el efecto "r2" (Basic Title) en <resources> y su font, size, etc.
+    #     current_text_offset_s += seg_duration_s
+    # Por ahora, omitiremos los textos visuales en FCPXML para esta primera versión.
+    # Te enfocarías en sincronizar los audios con el fondo en Resolve y añadir los textos allí.
+
+    # --- Escribir el Archivo FCPXML ---
+    try:
+        xml_string = ET.tostring(fcpxml_root, encoding='utf-8')
+        # "Embellecer" el XML para que sea legible
+        dom = minidom.parseString(xml_string)
+        pretty_xml_as_string = dom.toprettyxml(indent="  ")
+        
+        if fcpxml_output_path is None:
+            # WORKDIR es /usr/src/app. Guardaremos en outputs/fcpxml/<project_id>/
+            output_dir = os.path.join("/usr/src/app/outputs/fcpxml", project_id)
+            os.makedirs(output_dir, exist_ok=True)
+            fcpxml_output_path = os.path.join(output_dir, f"{project_id}_resolve.fcpxml")
+
+        with open(fcpxml_output_path, "w", encoding='utf-8') as f:
+            f.write(pretty_xml_as_string)
+        print(f"[FCPXML Export - {project_id}] FCPXML generado exitosamente en: {fcpxml_output_path}")
+        return fcpxml_output_path
+    except Exception as e_write:
+        print(f"[FCPXML Export - {project_id}] Error al escribir el archivo FCPXML: {e_write}")
+        import traceback; traceback.print_exc()
+        return None
+
+# Ejemplo de uso (para probar este servicio aisladamente)
+if __name__ == "__main__":
+    # Necesitarás un script_data.json y los audios generados para un project_id de prueba.
+    # Y un video/imagen de fondo en la ruta esperada.
+    
+    # 1. Simular script_segments (esto vendría de cargar tu script_data.json)
+    test_project_id = f"fcpxml_test_{uuid.uuid4().hex[:6]}"
+    sample_fps = 24
+    
+    # Crear carpetas de salida dummy para assets (para que las rutas en FCPXML existan conceptualmente)
+    # El FCPXML usará rutas absolutas dentro del contenedor (ej. /usr/src/app/outputs/...)
+    # Debes asegurarte que Resolve pueda acceder a estas rutas o ajustar las rutas en el FCPXML
+    # para que sean relativas a una carpeta de media que Resolve sí pueda ver.
+    
+    # Crear archivos de audio dummy para la prueba de FCPXML
+    dummy_audio_dir = os.path.join("/usr/src/app/outputs/audio", test_project_id, "title")
+    os.makedirs(dummy_audio_dir, exist_ok=True)
+    dummy_audio_files = []
+    for i in range(2): # Crear 2 segmentos de audio dummy
+        fname = os.path.join(dummy_audio_dir, f"segment_00{i+1}.mp3")
+        with open(fname, "w") as f: f.write("dummy_audio_content") # Crear archivo vacío
+        dummy_audio_files.append(os.path.relpath(fname, "/usr/src/app")) # Ruta relativa al WORKDIR
+
+    mock_script_segments = [
+        {
+            "id": "seg1", "segment_order": 1, "text_chunk": "Esta es la primera frase del título.",
+            "actual_tts_audio_url": dummy_audio_files[0], # ej. "outputs/audio/fcpxml_test_xxxx/title/segment_001.mp3"
+            "actual_tts_duration_ms": 3000, "source_type": "title",
+            "visual_type": "static_video", # O "static_image"
+            "visual_asset_url": "assets/videos/Video_Cosmico_flash.mp4", # Tu video de fondo
+            "visual_asset_url_is_loopable": True,
+            "visual_prompt_or_keyword": "Título principal"
+        },
+        {
+            "id": "seg2", "segment_order": 2, "text_chunk": "Y esta es la segunda frase.",
+            "actual_tts_audio_url": dummy_audio_files[1], # ej. "outputs/audio/fcpxml_test_xxxx/title/segment_002.mp3"
+            "actual_tts_duration_ms": 2500, "source_type": "title",
+            "visual_type": "static_video", 
+            "visual_asset_url": "assets/videos/Video_Cosmico_flash.mp4",
+            "visual_asset_url_is_loopable": True,
+            "visual_prompt_or_keyword": "Continuación del título"
+        }
+    ]
+    
+    # Simular datos del fondo principal
+    mock_main_bg_asset_path = "/usr/src/app/assets/videos/Video_Cosmico_flash.mp4" # Ruta absoluta en contenedor
+    mock_main_bg_type = "static_video"
+    mock_total_duration_s = (3000 + 2500) / 1000.0 # Suma de duraciones de los TTS
+
+    # Asegurar que el video de fondo exista para la prueba (copia uno a assets/videos si no lo has hecho)
+    if not os.path.exists(mock_main_bg_asset_path):
+        print(f"[ALERTA DE PRUEBA] El video de fondo para FCPXML no existe en {mock_main_bg_asset_path}")
+        print("                 Asegúrate de tener un video en assets/videos/ y que tu Dockerfile lo copie.")
+    else:
+        print(f"Generando FCPXML para el proyecto: {test_project_id}")
+        fcpxml_file = generate_fcpxml(
+            project_id=test_project_id,
+            script_segments=mock_script_segments,
+            main_background_asset_path=mock_main_bg_asset_path,
+            main_background_asset_type=mock_main_bg_type,
+            total_duration_s=mock_total_duration_s,
+            fps=sample_fps,
+            video_resolution=(1920, 1080)
+        )
+        if fcpxml_file:
+            print(f"\nPrueba de generación de FCPXML exitosa.")
+            print(f"Archivo FCPXML generado en (dentro del contenedor): {fcpxml_file}")
+            print(f"Deberías encontrarlo en tu máquina host en: outputs/fcpxml/{test_project_id}/{test_project_id}_resolve.fcpxml")
+            print("\nIntenta importar este archivo FCPXML en DaVinci Resolve.")
+            print("Asegúrate de que los paths a los archivos de audio y video en el FCPXML sean accesibles para Resolve.")
+            print("Puede que necesites copiar tu carpeta 'outputs/audio/' y 'assets/videos/' a una ubicación que Resolve pueda ver,")
+            print("y luego editar las rutas 'src=' en el FCPXML (o usar 'Relink Media' en Resolve).")
+
+        else:
+            print("\nFalló la generación del FCPXML de prueba.")

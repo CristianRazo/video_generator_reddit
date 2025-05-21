@@ -7,6 +7,7 @@ import uuid
 # Importar nuestros otros servicios
 from app.services import tts_service
 from app.services import ai_text_enhancer_service # Asumiendo que ya está creado y funciona
+from app.services import stock_media_service
 
 # (Tu función segment_text_into_sentences(...) permanece igual)
 def segment_text_into_sentences(text: str) -> List[str]:
@@ -18,124 +19,133 @@ def segment_text_into_sentences(text: str) -> List[str]:
 def create_script_segments(
     reddit_data: Dict[str, Any], 
     project_id: str = "default_project",
-    target_narration_language: str = "español"
+    target_narration_language: str = "español",
+    default_visual_type: str = "static_image",
+    default_visual_asset_url: str = "assets/images/default_background.jpg"
 ) -> List[Dict[str, Any]]:
-    script_segments = []
+    print(f"\n[SCRIPT_GEN - {project_id}] Iniciando para project_id: {project_id}")
+    script_segments_for_json = []
     global_segment_counter = 0
 
-    # --- Helper anidado para segmentar, hacer TTS y crear info de segmento ---
-    # Esta función ahora recibe texto que YA HA SIDO MEJORADO POR IA (si aplica)
-    def process_block_to_segments(
-        text_block_enhanced: str, # Texto del bloque ya mejorado por IA
-        original_text_block: str, # Texto del bloque original (para referencia)
-        source_type_tag: str,     # ej. "title", "selftext", "comment_1"
-        type_subfolder_for_tts: str, # ej. "title", "selftext", "comments/comment_1"
+    # --- Helper anidado ---
+    def process_sentences_to_segments(
+        sentences: List[str],
+        source_type_tag: str,
+        scene_visual_type: str,
+        scene_visual_asset_url: str,
+        scene_visual_is_loopable: bool,
+        block_keywords_str: Optional[str], # <--- NUEVO PARÁMETRO para las keywords del bloque
         current_project_id: str
     ):
         nonlocal global_segment_counter
-        nonlocal script_segments
+        nonlocal script_segments_for_json
 
-        sentences = segment_text_into_sentences(text_block_enhanced)
-        if not sentences:
-            print(f"[INFO] No se generaron frases para el bloque '{source_type_tag}' después de la mejora y segmentación.")
+        if not sentences: # ... (sin cambios) ...
             return
 
+        print(f"    [SCRIPT_GEN_HELPER - {current_project_id}] Procesando {len(sentences)} frases para '{source_type_tag}' con visual '{scene_visual_type}'. Keywords del bloque: '{block_keywords_str}'")
         for i, sentence_chunk in enumerate(sentences):
-            # El sentence_chunk ya es del texto mejorado
-            print(f"\nProcesando frase mejorada ({source_type_tag} - frase {i+1}): '{sentence_chunk[:50]}...'")
-            
             global_segment_counter += 1
+            # ... (lógica de TTS, audio_filename, generated_path, duration_ms - sin cambios) ...
+            tts_type_subfolder = source_type_tag
             audio_filename = f"segment_{global_segment_counter:03d}.mp3"
-            
             generated_path = tts_service.synthesize_text_to_audio_file(
-                text_to_speak=sentence_chunk, # Texto mejorado y segmentado
-                output_filename=audio_filename,
-                project_id=current_project_id,
-                type_subfolder=type_subfolder_for_tts
+                text_to_speak=sentence_chunk, output_filename=audio_filename,
+                project_id=current_project_id, type_subfolder=tts_type_subfolder
             )
-
-            if not generated_path:
-                print(f"[ERROR] No se pudo generar audio para la frase: '{sentence_chunk[:50]}...'")
-                continue 
-
+            if not generated_path: continue
             duration_ms = tts_service.get_audio_duration_ms(generated_path) or 0
-            print(f"Audio generado: {generated_path}, Duración: {duration_ms}ms")
+            
+            # Usar las keywords del bloque, o el chunk como fallback
+            prompt_keyword_to_store = block_keywords_str if block_keywords_str else sentence_chunk[:200]
 
-            script_segments.append({
+            segment_dict_data = {
                 "id": f"seg_{current_project_id}_{global_segment_counter:03d}",
-                "segment_order": global_segment_counter,
-                "text_chunk": sentence_chunk, # Este es el chunk de la frase ya mejorada
-                # "original_text_block": original_text_block, # Podríamos guardar el bloque original si es útil
-                "actual_tts_audio_url": generated_path,
+                "segment_order": global_segment_counter, 
+                "text_chunk": sentence_chunk,
+                "actual_tts_audio_url": generated_path, 
                 "actual_tts_duration_ms": duration_ms,
                 "source_type": source_type_tag,
-                "visual_type": "static_video",
-                "visual_prompt_or_keyword": sentence_chunk[:200],
-                "visual_asset_url": "assets/videos/Video_Cosmico_flash.mp4", # Placeholder, puedes cambiarlo
-                "visual_duration_ms": duration_ms,
-                "transition_to_next": "cut",
-                "subtitles_enabled": True,
-                "voice_options": None,
-                "visual_asset_url_is_loopable": True
-            })
+                "visual_type": scene_visual_type,
+                "visual_asset_url": scene_visual_asset_url,
+                "visual_asset_url_is_loopable": scene_visual_is_loopable,
+                "visual_prompt_or_keyword": prompt_keyword_to_store, # <--- CAMBIO AQUÍ
+                "visual_duration_ms": duration_ms, 
+                "transition_to_next": "cut", "subtitles_enabled": True, "voice_options": None,
+            }
+            script_segments_for_json.append(segment_dict_data)
+            print(f"        [SCRIPT_GEN_HELPER] Segmento #{global_segment_counter} AÑADIDO. Prompt/KW: '{prompt_keyword_to_store[:50]}...'")
     # --- Fin del helper anidado ---
 
-    # 1. Procesar el TÍTULO
+    text_blocks_to_process = []
+    # ... (lógica para llenar text_blocks_to_process con title, selftext, comments - sin cambios) ...
     if reddit_data.get("title"):
-        original_title = reddit_data["title"]
-        print(f"\nMejorando TÍTULO con IA: '{original_title[:100]}...'")
-        enhanced_title = ai_text_enhancer_service.enhance_text_for_tts(
-            original_title, target_language=target_narration_language
-        )
-        if not enhanced_title: 
-            print(f"[WARN] Falló la mejora del título con IA, usando original.")
-            enhanced_title = original_title
-        else:
-            print(f"Título mejorado por IA: '{enhanced_title[:100]}...'")
-        
-        process_block_to_segments(enhanced_title, original_title, "title", "title", project_id)
-
-    # 2. Procesar el SELFTEXT
-    if reddit_data.get("selftext"):
-        original_selftext = reddit_data["selftext"]
-        if original_selftext and original_selftext.strip(): # Solo procesar si hay contenido
-            print(f"\nMejorando SELFTEXT con IA: '{original_selftext[:100]}...'")
-            enhanced_selftext = ai_text_enhancer_service.enhance_text_for_tts(
-                original_selftext, target_language=target_narration_language
-            )
-            if not enhanced_selftext:
-                print(f"[WARN] Falló la mejora del selftext con IA, usando original.")
-                enhanced_selftext = original_selftext
-            else:
-                print(f"Selftext mejorado por IA (primeros 100): '{enhanced_selftext[:100]}...'")
-
-            process_block_to_segments(enhanced_selftext, original_selftext, "selftext", "selftext", project_id)
-        else:
-            print("[INFO] Selftext está vacío, omitiendo.")
-
-
-    # 3. Procesar los COMENTARIOS
+        text_blocks_to_process.append({"type": "title", "text": reddit_data["title"], "comment_idx": None})
+    if reddit_data.get("selftext") and reddit_data["selftext"].strip():
+        text_blocks_to_process.append({"type": "selftext", "text": reddit_data["selftext"], "comment_idx": None})
     if reddit_data.get("top_comments"):
-        for comment_idx, comment in enumerate(reddit_data["top_comments"]):
-            if comment.get("body"):
-                original_comment_body = comment["body"]
-                comment_tag = f"comment_{comment_idx+1}"
-                comment_tts_subfolder = os.path.join("comments", comment_tag)
+        for idx, comment in enumerate(reddit_data["top_comments"]):
+            if comment.get("body") and comment["body"].strip():
+                text_blocks_to_process.append({"type": "comment", "text": comment["body"], "comment_idx": idx + 1})
 
-                print(f"\nMejorando {comment_tag.upper()} con IA: '{original_comment_body[:100]}...'")
-                enhanced_comment_body = ai_text_enhancer_service.enhance_text_for_tts(
-                    original_comment_body, target_language=target_narration_language
-                )
-                if not enhanced_comment_body:
-                    print(f"[WARN] Falló la mejora del {comment_tag.upper()} con IA, usando original.")
-                    enhanced_comment_body = original_comment_body
-                else:
-                    print(f"{comment_tag.upper()} mejorado por IA: '{enhanced_comment_body[:100]}...'")
-                
-                process_block_to_segments(enhanced_comment_body, original_comment_body, comment_tag, comment_tts_subfolder, project_id)
-    
-    print(f"\nProceso de generación de guion completado. Se generaron {len(script_segments)} segmentos en total.")
-    return script_segments
+
+    for block_info in text_blocks_to_process:
+        original_text = block_info["text"]
+        source_type = block_info["type"]
+        comment_idx = block_info["comment_idx"]
+        current_source_tag = source_type
+        if source_type == "comment":
+            current_source_tag = f"comment_{comment_idx}"
+        
+        print(f"\n[SCRIPT_GEN - {project_id}] Procesando bloque: {current_source_tag.upper()} (Original: '{original_text[:70]}...')")
+
+        enhanced_text, keywords_list = ai_text_enhancer_service.enhance_text_and_extract_keywords(
+            original_text, target_language=target_narration_language
+        )
+        if not enhanced_text: enhanced_text = original_text
+        
+        keywords_query_for_stock_video = None # String de keywords para Pexels
+        if keywords_list:
+            keywords_query_for_stock_video = ", ".join(keywords_list) # Unir lista en string
+            print(f"  [SCRIPT_GEN - {project_id}] Keywords extraídas para {current_source_tag}: '{keywords_query_for_stock_video}'")
+        else:
+            print(f"  [SCRIPT_GEN - {project_id}] No se extrajeron keywords para {current_source_tag}.")
+
+        scene_visual_type_to_use = default_visual_type
+        scene_visual_asset_to_use = default_visual_asset_url
+        scene_visual_loopable = False 
+
+        if keywords_query_for_stock_video: # Solo buscar si tenemos keywords
+            print(f"  Buscando video de stock para '{keywords_query_for_stock_video}'...")
+            stock_video_filename = f"{current_source_tag}_bg_video.mp4"
+            downloaded_video_path = stock_media_service.search_and_download_pexels_video(
+                keywords=keywords_query_for_stock_video, project_id=project_id,
+                video_filename=stock_video_filename
+            )
+            if downloaded_video_path:
+                print(f"  Video de stock encontrado para {current_source_tag}: {downloaded_video_path}")
+                scene_visual_type_to_use = "static_video"
+                scene_visual_asset_to_use = downloaded_video_path
+                scene_visual_loopable = True 
+            else:
+                print(f"  No se encontró video de stock para {current_source_tag}. Usando visual por defecto.")
+        else: # Si no hubo keywords, usar visual por defecto
+             print(f"  No hay keywords para buscar video de stock para {current_source_tag}. Usando visual por defecto.")
+            
+        sentences_for_block = segment_text_into_sentences(enhanced_text)
+        
+        process_sentences_to_segments(
+            sentences_for_block,
+            current_source_tag,
+            scene_visual_type_to_use,
+            scene_visual_asset_to_use,
+            scene_visual_loopable,
+            keywords_query_for_stock_video, # <--- PASAR LAS KEYWORDS DEL BLOQUE
+            project_id
+        )
+
+    print(f"\n[SCRIPT_GEN - {project_id}] FINALIZADO. Total segmentos para JSON: {len(script_segments_for_json)}")
+    return script_segments_for_json
 
 # --- Bloque if __name__ == "__main__": para probar ---
 if __name__ == "__main__":

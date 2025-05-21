@@ -9,7 +9,7 @@ REDDIT_USER_AGENT = "Python:VideoGenerator:0.1 by u/TU_USERNAME_DE_REDDIT"
 
 # Credenciales de OpenAI API
 OPENAI_API_KEY = "sk-TU_CLAVE_API_SECRETA_DE_OPENAI_AQUI"
-
+PEXELS_API_KEY = "tu clave de pexels"
 # Para Google Cloud TTS (NO guardes el JSON en config.py, usa la variable de entorno)
 # Simplemente indica que se necesita la variable de entorno:
 # GOOGLE_APPLICATION_CREDENTIALS debe estar configurada en el entorno apuntando al archivo .json

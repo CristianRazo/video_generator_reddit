@@ -45,6 +45,8 @@ services:
       # O puedes usar la imagen ya construida si prefieres:
       # image: video-generator-backend 
       container_name: video_generator_celery_worker_container
+      devices:
+      - "/dev/dri/renderD128:/dev/dri/renderD128"
       volumes:
         - ./app:/usr/src/app/app # Monta el código para que el worker vea los cambios
         - ./secrets:/usr/src/app/secrets:ro # Monta el directorio 'secrets' como solo lectura
